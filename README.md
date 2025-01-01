@@ -11,7 +11,8 @@ Dự án này là một **Hệ Thống Điểm Danh Bằng Nhận Diện Gương
 
 ## Yêu Cầu
 - Docker & Docker Compose
-- Python 3.8+
+- Python
+- PostgreSQL
 
 ## Cài Đặt
 
@@ -37,23 +38,8 @@ Dự án này là một **Hệ Thống Điểm Danh Bằng Nhận Diện Gương
 4. **Truy Cập Ứng Dụng:**
    - Ứng dụng PyQt5 có thể được khởi chạy bằng cách chạy script chính bên trong container:
      ```bash
-     docker exec -it facial_recognition_app python main.py
+     docker exec -it recognition_app python app.py
      ```
-
-## Cấu Trúc Dự Án
-```
-facial-recognition-attendance/
-├── app/
-│   ├── main.py         # Điểm bắt đầu của ứng dụng PyQt5
-│   ├── recognition/    # Logic nhận diện khuôn mặt với OpenCV
-│   ├── database/       # Các script tương tác với cơ sở dữ liệu
-│   └── ui/             # Các file giao diện PyQt5
-├── docker-compose.yml  # Cấu hình Docker Compose
-├── Dockerfile          # Dockerfile cho ứng dụng
-├── requirements.txt    # Các thư viện Python cần thiết
-├── .env                # File biến môi trường
-└── README.md           # Tài liệu dự án
-```
 
 ## Công Nghệ Sử Dụng
 - **OpenCV:** Xử lý nhận diện khuôn mặt.
