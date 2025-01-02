@@ -11,6 +11,13 @@ from PIL import Image
 import logging
 _logger = logging.getLogger(__name__)
 
+# Constants
+CONFIDENCE_THRESHOLD = 20
+REQUIRED_FACE_SAMPLES = 30
+DATASET_DIR = 'dataset'
+TRAINER_DIR = 'trainer'
+TRAINER_FILE = 'trainer.yml'
+
 class DatabaseManager:
     def __init__(self):
         try:
@@ -27,7 +34,7 @@ class DatabaseManager:
             _logger.error(f"Failed to connect to database {str(e)}")
             raise e
 
-    def add_user(self, full_name, email, role):
+    def add_user(self, full_name, email, role, class_id = None):
         try:
             _logger.info(f"Attempting to add user: {full_name}, {email}, {role}")
             if role not in ['student', 'teacher', 'admin']:
@@ -38,6 +45,11 @@ class DatabaseManager:
                 (full_name, email, role)
             )
             user_id = self.cur.fetchone()[0]
+
+            # If user is a student and class_id is provided, register them to the class
+            if role == 'student' and class_id is not None:
+                self.register_student_to_class(class_id, user_id)
+
             self.conn.commit()
             _logger.info(f"User added successfully with ID: {user_id}")
             return user_id
@@ -185,6 +197,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Face Recognition Attendance System")
+
+        # Ensure required directories exist
+        for directory in [DATASET_DIR, TRAINER_DIR]:
+            if not os.path.exists(directory):
+                os.makedirs(directory)
+
         self.db = DatabaseManager()
         self.current_class_id = None
         self.setup_ui()
@@ -203,7 +221,7 @@ class MainWindow(QMainWindow):
         camera_tab = QWidget()
         camera_layout = QVBoxLayout(camera_tab)
 
-        #Add Class Management tab
+        # Add Class Management tab
         class_tab = QWidget()
         class_layout = QVBoxLayout(class_tab)
         
@@ -228,15 +246,16 @@ class MainWindow(QMainWindow):
         self.semester_input = QLineEdit()
         form_layout.addRow("Semester:", self.semester_input)
 
-        # Add class selection for attendance
-        self.class_select = QComboBox()
-        self.update_class_list()
+        # Initialize class_select here before using it
+        self.class_select = QComboBox()  # Moved up this line
+        self.update_class_combo()  # This will populate the class_select combobox
+        
         class_layout.addWidget(QLabel("Select Class for Attendance:"))
         class_layout.addWidget(self.class_select)
         
         tabs.addTab(class_tab, "Class Management")
         
-         # Add Attendance View tab
+        # Add Attendance View tab
         attendance_tab = QWidget()
         attendance_layout = QVBoxLayout(attendance_tab)
         
@@ -292,16 +311,28 @@ class MainWindow(QMainWindow):
         self.email_input = QLineEdit()
         self.role_combo = QComboBox()
         self.role_combo.addItems(['student', 'teacher', 'admin'])
+
+        # Create class selection combobox
+        self.class_combo = QComboBox()
+        self.update_class_list()
         
         reg_layout.addRow("Full Name:", self.name_input)
         reg_layout.addRow("Email:", self.email_input)
         reg_layout.addRow("Role:", self.role_combo)
+        reg_layout.addRow("Class:", self.class_combo)
+
+        # Connect role change to toggle class selection visibility
+        self.role_combo.currentTextChanged.connect(self.toggle_class_selection)
         
         register_button = QPushButton("Register & Capture Face")
         register_button.clicked.connect(self.register_user)
         reg_layout.addWidget(register_button)
-        
+
+        # Initially hide class selection (shown only for students)
+        self.toggle_class_selection(self.role_combo.currentText())
+
         tabs.addTab(registration_tab, "Registration")
+
 
         # Update teacher select combobox
         self.teacher_select.clear()
@@ -384,6 +415,23 @@ class MainWindow(QMainWindow):
         for class_id, class_name in classes:
             self.class_select.addItem(class_name, class_id)
 
+    def update_class_combo(self):
+        self.class_select.clear()
+        try: 
+            classes = self.db.get_classes()
+            self.class_select.addItem("Select Class", None)
+            for class_id, class_name in classes:
+                self.class_select.addItem(class_name, class_id)
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to fetch classes: {str(e)}")
+
+
+    def toggle_class_selection(self, role):
+        # Show class selection only for students
+        self.class_combo.setVisible(role == 'student')
+        if role != 'student':
+            self.class_combo.setCurrentIndex(0)
+
     def view_attendance(self):
         class_id = self.class_select.currentData()
         selected_date = self.date_select.date().toPyDate()
@@ -438,15 +486,20 @@ class MainWindow(QMainWindow):
         name = self.name_input.text()
         email = self.email_input.text()
         role = self.role_combo.currentText()
+        class_id = self.class_combo.currentData() if role == 'student' else None
         
         if not all([name, email, role]):
-            QMessageBox.warning(self, "Error", "Please fill all fields")
+            QMessageBox.warning(self, "Error", "Please fill required fields")
             return
             
+        if role == 'student' and class_id is None:
+            QMessageBox.warning(self, "Error", "Please select a class for the student")
+            return
+        
         try:
             _logger.info(f"Starting user registration for {name}")
             # Add user to database
-            user_id = self.db.add_user(name, email, role)
+            user_id = self.db.add_user(name, email, role, class_id)
 
             if user_id:
                 reply = QMessageBox.question(self, "Success", 
@@ -457,59 +510,125 @@ class MainWindow(QMainWindow):
                     # Start face capture
                     self.capture_faces(user_id)
                 else:
-                    self.name_input.clear()
-                    self.email_input.clear()
+                    self.clear_registration_fields()
+                    # self.name_input.clear()
+                    # self.email_input.clear()
             
         except ValueError as ve:
             QMessageBox.warning(self, "Error", str(ve))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Registration failed: {str(e)}")
 
+    def clear_registration_fields(self):
+        self.name_input.clear()
+        self.email_input.clear()
+        self.class_combo.setCurrentIndex(0)
+
     def capture_faces(self, user_id):
+        _logger.info(f"Starting face capture for user: {user_id}")
         face_detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
-        cam = cv2.VideoCapture(0)
-        count = 0
-        
-        while count < 30:
-            ret, img = cam.read()
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            faces = face_detector.detectMultiScale(gray, 1.3, 5)
+        cam = None
+        try:
+
+            cam = cv2.VideoCapture(0)
+            count = 0
             
-            for (x, y, w, h) in faces:
-                count += 1
-                # Save face image
-                image_path = f"dataset/User.{user_id}.{count}.jpg"
-                cv2.imwrite(image_path, gray[y:y+h, x:x+w])
+            while count < 30:
+                ret, img = cam.read()
+                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                faces = face_detector.detectMultiScale(gray, 1.3, 5)
                 
-                # Save face data to database
-                face_encoding = gray[y:y+h, x:x+w].tobytes().hex()
-                self.db.save_face_data(user_id, face_encoding, image_path)
-                
-            if count >= 30:
-                break
-                
-        cam.release()
-        self.train_model()
+                for (x, y, w, h) in faces:
+                    count += 1
+                    # Save face image
+                    image_path = f"dataset/User.{user_id}.{count}.jpg"
+                    cv2.imwrite(image_path, gray[y:y+h, x:x+w])
+                    
+                    # Save face data to database
+                    face_encoding = gray[y:y+h, x:x+w].tobytes().hex()
+                    self.db.save_face_data(user_id, face_encoding, image_path)
+                    
+                if count >= 30:
+                    break
+        
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to capture face data: {str(e)}")
+            raise e
+        finally:
+            if cam is not None:
+                cam.release()
+                #self.train_model()
+
+    # def train_model(self):
+    #     try:
+    #         path = 'dataset'
+    #         recognizer = cv2.face.LBPHFaceRecognizer_create()
+    #         detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
+
+    #         faces = []
+    #         ids = []
+            
+    #         for image_path in os.listdir(path):
+    #             if image_path.startswith("User"):
+    #                 img = Image.open(os.path.join(path, image_path)).convert('L')
+    #                 img_numpy = np.array(img, 'uint8')
+    #                 id_ = int(image_path.split(".")[1])
+    #                 faces.append(img_numpy)
+    #                 ids.append(id_)
+
+    #         recognizer.train(faces, np.array(ids))
+    #         recognizer.write('trainer/trainer.yml')
+    #         QMessageBox.information(self, "Success", "Registration complete and model trained!")
 
     def train_model(self):
-        path = 'dataset'
-        recognizer = cv2.face.LBPHFaceRecognizer_create()
-        detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
+        try:
+            _logger.info("Training model....")
+            recognizer = cv2.face.LBPHFaceRecognizer_create()
+            detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
 
-        faces = []
-        ids = []
-        
-        for image_path in os.listdir(path):
-            if image_path.startswith("User"):
-                img = Image.open(os.path.join(path, image_path)).convert('L')
-                img_numpy = np.array(img, 'uint8')
-                id_ = int(image_path.split(".")[1])
-                faces.append(img_numpy)
-                ids.append(id_)
+            faces = []
+            ids = []
+            
+            # Check if dataset directory is empty
+            if not os.listdir(DATASET_DIR):
+                raise ValueError("No face data available for training")
 
-        recognizer.train(faces, np.array(ids))
-        recognizer.write('trainer/trainer.yml')
-        QMessageBox.information(self, "Success", "Registration complete and model trained!")
+            for image_path in os.listdir(DATASET_DIR):
+                if not image_path.startswith("User"):
+                    continue
+                    
+                try:
+                    img_path = os.path.join(DATASET_DIR, image_path)
+                    img = Image.open(img_path).convert('L')
+                    img_numpy = np.array(img, 'uint8')
+                    id_ = int(image_path.split(".")[1])
+                    faces.append(img_numpy)
+                    ids.append(id_)
+                except Exception as e:
+                    _logger.warning(f"Skipping corrupted image {image_path}: {str(e)}")
+                    continue
+
+            if not faces:
+                raise ValueError("No valid face images found")
+
+            recognizer.train(faces, np.array(ids))
+            trainer_path = os.path.join(TRAINER_DIR, TRAINER_FILE)
+            recognizer.write(trainer_path)
+            QMessageBox.information(self, "Success", "Registration complete and model trained!")
+            
+        except Exception as e:
+            _logger.error(f"Error training model: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to train model: {str(e)}")
+
+
+    def closeEvent(self, event):
+        """Handle application shutdown"""
+        try:
+            self.stop_recognition()
+            if hasattr(self, 'db'):
+                self.db.close()
+        finally:
+            super().closeEvent(event)
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
