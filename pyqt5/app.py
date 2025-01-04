@@ -33,6 +33,18 @@ class DatabaseManager:
         except Exception as e:
             _logger.error(f"Failed to connect to database {str(e)}")
             raise e
+        
+    def close(self):
+        """Safely close database connection and cursor"""
+        try:
+            if self.cur:
+                self.cur.close()
+            if self.conn:
+                self.conn.close()
+            _logger.info("Database connection closed successfully")
+        except Exception as e:
+            _logger.error(f"Error closing database connection: {str(e)}")
+
 
     def add_user(self, full_name, email, role, class_id = None):
         try:
@@ -61,6 +73,18 @@ class DatabaseManager:
             self.conn.rollback()
             _logger.error(f"Failed to add user: {str(e)}")
             raise e
+        
+    def is_student_registered(self, class_id, student_id):
+        """Check if a student is registered for a specific class"""
+        try:
+            self.cur.execute("""
+                SELECT 1 FROM class_students 
+                WHERE class_id = %s AND student_id = %s
+            """, (class_id, student_id))
+            return bool(self.cur.fetchone())
+        except Exception as e:
+            _logger.error(f"Failed to check student registration: {str(e)}")
+            raise e
 
     def save_face_data(self, user_id, face_encoding, image_path):
         try:
@@ -78,6 +102,9 @@ class DatabaseManager:
     def record_attendance(self, class_id, student_id, status, confidence_score):
             try:
                 _logger.info(f"Recording attendance: class_id: {class_id}, student_id: {student_id}, status: {status}, + {confidence_score}")
+                # Đảm bảo confidence_score nằm trong khoảng hợp lệ
+                confidence_score = max(0, min(100, confidence_score))  # Giới hạn giá trị từ 0 đến 100
+
                 current_date = datetime.date.today()
                 current_time = datetime.datetime.now().time()
                 
@@ -164,6 +191,7 @@ class DatabaseManager:
 class FaceRecognitionThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
     recognition_signal = pyqtSignal(str, float)
+    error_signal = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -175,9 +203,17 @@ class FaceRecognitionThread(QThread):
 
     def run(self):
         cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            self.error_signal.emit("Failed to open camera")
+            return
+        
         while self.running:
             ret, frame = cap.read()
-            if ret:
+            if not ret:
+                self.error_signal.emit("Failed to read from camera")
+                break
+
+            try:
                 frame = cv2.flip(frame, 1)
                 gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
                 faces = self.face_cascade.detectMultiScale(gray, 1.3, 5)
@@ -190,6 +226,9 @@ class FaceRecognitionThread(QThread):
                         self.recognition_signal.emit(str(id_), confidence)
                     
                 self.change_pixmap_signal.emit(frame)
+            except Exception  as e:
+                self.error_signal.emit(f"Error processing frame: {str(e)}")
+                break
             
         cap.release()
 
@@ -197,6 +236,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Face Recognition Attendance System")
+        self.current_class_id = None
 
         # Ensure required directories exist
         for directory in [DATASET_DIR, TRAINER_DIR]:
@@ -204,8 +244,8 @@ class MainWindow(QMainWindow):
                 os.makedirs(directory)
 
         self.db = DatabaseManager()
-        self.current_class_id = None
         self.setup_ui()
+
         
     def setup_ui(self):
         # Create central widget and layout
@@ -216,42 +256,48 @@ class MainWindow(QMainWindow):
         # Create tabs
         tabs = QTabWidget()
         layout.addWidget(tabs)
+
+        self.class_select = QComboBox()  # Moved up this line
+        # Create class selection combobox
+        self.class_combo = QComboBox()
         
         # Add Camera Feed tab
         camera_tab = QWidget()
         camera_layout = QVBoxLayout(camera_tab)
+
+        # Add class selection at the top of camera tab
+        class_select_layout = QHBoxLayout()
+        class_select_layout.addWidget(QLabel("Select Class for Attendance:"))
+        self.camera_class_select = QComboBox()
+        self.update_all_class_lists()  # This will now update camera_class_select too
+        class_select_layout.addWidget(self.camera_class_select)
+        camera_layout.addLayout(class_select_layout)
 
         # Add Class Management tab
         class_tab = QWidget()
         class_layout = QVBoxLayout(class_tab)
         
         # Add class form
-        form_group = QGroupBox("Add New Class")
+        form_group = QGroupBox("Thêm lớp mới")
         form_layout = QFormLayout()
         
         self.class_name_input = QLineEdit()
         self.teacher_select = QComboBox()
+        self.semester_input = QLineEdit()
         
         form_layout.addRow("Class Name:", self.class_name_input)
         form_layout.addRow("Teacher:", self.teacher_select)
+        form_layout.addRow("Semester:", self.semester_input)
         
-        add_class_button = QPushButton("Add Class")
+        add_class_button = QPushButton("Thêm lớp")
         add_class_button.clicked.connect(self.add_class)
         form_layout.addRow(add_class_button)
         
         form_group.setLayout(form_layout)
         class_layout.addWidget(form_group)
 
-        # Add semester field in class form
-        self.semester_input = QLineEdit()
-        form_layout.addRow("Semester:", self.semester_input)
-
         # Initialize class_select here before using it
-        self.class_select = QComboBox()  # Moved up this line
         self.update_class_combo()  # This will populate the class_select combobox
-        
-        class_layout.addWidget(QLabel("Select Class for Attendance:"))
-        class_layout.addWidget(self.class_select)
         
         tabs.addTab(class_tab, "Class Management")
         
@@ -265,6 +311,9 @@ class MainWindow(QMainWindow):
         self.date_select.setDate(QDate.currentDate())
         date_layout.addWidget(QLabel("Select Date:"))
         date_layout.addWidget(self.date_select)
+
+        date_layout.addWidget(QLabel("Select Class for Attendance:"))
+        date_layout.addWidget(self.class_select)
         
         view_button = QPushButton("View Attendance")
         view_button.clicked.connect(self.view_attendance)
@@ -312,27 +361,24 @@ class MainWindow(QMainWindow):
         self.role_combo = QComboBox()
         self.role_combo.addItems(['student', 'teacher', 'admin'])
 
-        # Create class selection combobox
-        self.class_combo = QComboBox()
         self.update_class_list()
         
-        reg_layout.addRow("Full Name:", self.name_input)
+        reg_layout.addRow("Tên đầy đủ :", self.name_input)
         reg_layout.addRow("Email:", self.email_input)
-        reg_layout.addRow("Role:", self.role_combo)
-        reg_layout.addRow("Class:", self.class_combo)
+        reg_layout.addRow("Vai trờ:", self.role_combo)
+        reg_layout.addRow("Lớp:", self.class_combo)
 
         # Connect role change to toggle class selection visibility
         self.role_combo.currentTextChanged.connect(self.toggle_class_selection)
         
-        register_button = QPushButton("Register & Capture Face")
+        register_button = QPushButton("Đăng ký và chụp ảnh gương mặt")
         register_button.clicked.connect(self.register_user)
         reg_layout.addWidget(register_button)
 
         # Initially hide class selection (shown only for students)
         self.toggle_class_selection(self.role_combo.currentText())
 
-        tabs.addTab(registration_tab, "Registration")
-
+        tabs.addTab(registration_tab, "Đăng ký")
 
         # Update teacher select combobox
         self.teacher_select.clear()
@@ -397,13 +443,13 @@ class MainWindow(QMainWindow):
         semester = self.semester_input.text()
         
         if not all([class_name, teacher_id, semester]):
-            QMessageBox.warning(self, "Error", "Please fill all fields")
+            QMessageBox.warning(self, "Error", "Hãy điền vào đầy đủ")
             return
             
         try:
             self.db.add_class(class_name, teacher_id, semester)
-            self.update_class_list()
-            QMessageBox.information(self, "Success", "Class added successfully!")
+            self.update_all_class_lists()
+            QMessageBox.information(self, "Success", "Lớp đã thêm thành công!")
             self.class_name_input.clear()
             self.semester_input.clear()
         except Exception as e:
@@ -411,20 +457,48 @@ class MainWindow(QMainWindow):
 
     def update_class_list(self):
         self.class_select.clear()
+        self.update_all_class_lists()
         classes = self.db.get_classes()
         for class_id, class_name in classes:
             self.class_select.addItem(class_name, class_id)
 
+    def update_all_class_lists(self):
+        """Update all class-related combo boxes"""
+        try:
+            classes = self.db.get_classes()
+            
+            # # Update class_select (for attendance view)
+            # self.class_select.clear()
+            # self.class_select.addItem("Select Class", None)
+            # for class_id, class_name in classes:
+            #     self.class_select.addItem(class_name, class_id)
+            
+            # # Update class_combo (for registration)
+            # self.class_combo.clear()
+            # self.class_combo.addItem("Select Class", None)
+            # for class_id, class_name in classes:
+            #     self.class_combo.addItem(class_name, class_id)
+
+            # Update all class selection comboboxes
+            for combo in [self.class_select, self.class_combo, self.camera_class_select]:
+                combo.clear()
+                combo.addItem("Select Class", None)
+                for class_id, class_name in classes:
+                    combo.addItem(class_name, class_id)
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to fetch classes: {str(e)}")
+
     def update_class_combo(self):
         self.class_select.clear()
         try: 
+            self.update_all_class_lists()
             classes = self.db.get_classes()
             self.class_select.addItem("Select Class", None)
             for class_id, class_name in classes:
                 self.class_select.addItem(class_name, class_id)
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to fetch classes: {str(e)}")
-
 
     def toggle_class_selection(self, role):
         # Show class selection only for students
@@ -435,27 +509,46 @@ class MainWindow(QMainWindow):
     def view_attendance(self):
         class_id = self.class_select.currentData()
         selected_date = self.date_select.date().toPyDate()
+
+        if class_id is None:
+            QMessageBox.warning(self, "Warning", "Please select a class to view attendance")
+            return
         
         try:
             attendance_data = self.db.get_attendance_by_date(class_id, selected_date)
+
+            # Clear and set up the table
+            self.attendance_table.setRowCount(0)  # Clear existing rows
             self.attendance_table.setRowCount(len(attendance_data))
             
             for row, (name, time, status, confidence) in enumerate(attendance_data):
-                self.attendance_table.setItem(row, 0, QTableWidgetItem(name))
+                self.attendance_table.setItem(row, 0, QTableWidgetItem(str(name)))
                 self.attendance_table.setItem(row, 1, QTableWidgetItem(time.strftime("%H:%M:%S")))
                 self.attendance_table.setItem(row, 2, QTableWidgetItem(status))
                 self.attendance_table.setItem(row, 3, QTableWidgetItem(f"{confidence:.2f}%"))
                 
+            # Resize columns to content
+            self.attendance_table.resizeColumnsToContents()
+
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load attendance data: {str(e)}")
 
     def start_recognition(self):
+        # Check if a class is selected
+        self.current_class_id = self.camera_class_select.currentData()
+        if self.current_class_id is None:
+            QMessageBox.warning(self, "Warning", "Please select a class before starting recognition")
+            return
+
         self.thread.running = True
         self.thread.start()
+        self.status_label.setText("Recognition started. Waiting for faces...")
 
     def stop_recognition(self):
         self.thread.running = False
         self.thread.wait()
+        self.current_class_id = None
+        self.status_label.setText("Recognition stopped")
 
     @pyqtSlot(np.ndarray)
     def update_image(self, cv_img):
@@ -464,16 +557,43 @@ class MainWindow(QMainWindow):
 
     @pyqtSlot(str, float)
     def handle_recognition(self, user_id, confidence):
-        confidence_score = 100 - confidence
-        status = 'present' if confidence_score > 20 else 'unknown'
+        # Convert OpenCV confidence (lower is better) to percentage (higher is better)
+        # OpenCV confidence is typically 0-100 where 0 is perfect match
+        confidence_score = max(0, min(100, 100 - confidence))
+
+        status = 'present' if confidence_score > CONFIDENCE_THRESHOLD else 'absent'
+
+        # status = 'present' if confidence_score > CONFIDENCE_THRESHOLD else 'unknown'
         self.status_label.setText(f"Recognized: {user_id} (Confidence: {confidence_score:.2f}%)")
         
         if status == 'present' and self.current_class_id:
             # Record attendance in database
             try:
+                # # Check if student is registered for this class
+                # self.db.cur.execute("""
+                #     SELECT 1 FROM class_students
+                #                  WHERE class_id = %s AND student_id = %s
+                # """, (self.current_class_id, int(user_id)))
+
+                # if not self.cur.fetchone():
+                #     self.status_label.setText(f"Student {user_id} not registered for this class")
+                #     return
+                if not self.db.is_student_registered(self.current_class_id, int(user_id)):
+                    self.status_label.setText(f"Student {user_id} not registered for this class")
+                    return
+
                 self.db.record_attendance(self.current_class_id, int(user_id), status, confidence_score)
+                # Update status label with recognition result
+                self.status_label.setText(f"Attendance recorded for ID: {user_id} (Confidence: {confidence_score:.2f}%)")
+
+                # Automatically refresh the attendance table if we're on the attendance tab
+                # and the date is today
+                if self.date_select.date() == QDate.currentDate():
+                    self.view_attendance()
             except Exception as e:
-                QMessageBox.warning(self, "Error", f"Failed to record attendance: {str(e)}")
+                _logger.error(f"Failed to handle recognition: {str(e)}")
+                self.status_label.setText(f"Error recording attendance: {str(e)}")
+                # QMessageBox.warning(self, "Error", f"Failed to record attendance: {str(e)}")
 
     def convert_cv_qt(self, cv_img):
         rgb_image = cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB)
@@ -529,26 +649,39 @@ class MainWindow(QMainWindow):
         face_detector = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
         cam = None
         try:
-
             cam = cv2.VideoCapture(0)
-            count = 0
+            if not cam.isOpened():
+                raise Exception("Failed to open camera")
             
-            while count < 30:
+            count = 0
+            user_path = os.path.join(DATASET_DIR, f"User_{user_id}")
+            os.makedirs(user_path, exist_ok=True)
+            
+            while count < REQUIRED_FACE_SAMPLES :
                 ret, img = cam.read()
+                if not ret:
+                    raise Exception("Failed to read from camera")
+                
                 gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                 faces = face_detector.detectMultiScale(gray, 1.3, 5)
                 
                 for (x, y, w, h) in faces:
                     count += 1
                     # Save face image
-                    image_path = f"dataset/User.{user_id}.{count}.jpg"
-                    cv2.imwrite(image_path, gray[y:y+h, x:x+w])
+                    # image_path = f"dataset/User.{user_id}.{count}.jpg"
+                    image_path = os.path.join(user_path, f"{count}.jpg")
+                    face_img = gray[y:y+h, x:x+w]
+                    cv2.imwrite(image_path, face_img)
                     
                     # Save face data to database
-                    face_encoding = gray[y:y+h, x:x+w].tobytes().hex()
+                    face_encoding = face_img.tobytes().hex()
                     self.db.save_face_data(user_id, face_encoding, image_path)
+
+                    # Show progress
+                    self.status_label.setText(f"Capturing face {count}/{REQUIRED_FACE_SAMPLES}")
+                    QApplication.processEvents()
                     
-                if count >= 30:
+                if count >= REQUIRED_FACE_SAMPLES:
                     break
         
         except Exception as e:
@@ -557,7 +690,7 @@ class MainWindow(QMainWindow):
         finally:
             if cam is not None:
                 cam.release()
-                #self.train_model()
+                self.train_model() # Always train model after capturing faces
 
     # def train_model(self):
     #     try:
@@ -627,6 +760,8 @@ class MainWindow(QMainWindow):
             self.stop_recognition()
             if hasattr(self, 'db'):
                 self.db.close()
+        except Exception as e:
+            _logger.error(f"Error during shutdown: {str(e)}")
         finally:
             super().closeEvent(event)
 
