@@ -4,7 +4,7 @@ import numpy as np
 import os
 import datetime
 import psycopg2
-from PyQt5.QtWidgets import *
+from PyQt5.QtWidgets import *       
 from PyQt5.QtGui import *
 from PyQt5.QtCore import *
 from PIL import Image
@@ -12,8 +12,8 @@ import logging
 _logger = logging.getLogger(__name__)
 
 # Constants
-CONFIDENCE_THRESHOLD = 20
-REQUIRED_FACE_SAMPLES = 30
+CONFIDENCE_THRESHOLD = 50
+REQUIRED_FACE_SAMPLES = 100 #30
 DATASET_DIR = 'dataset'
 TRAINER_DIR = 'trainer'
 TRAINER_FILE = 'trainer.yml'
@@ -246,6 +246,63 @@ class MainWindow(QMainWindow):
         self.db = DatabaseManager()
         self.setup_ui()
 
+    
+    def apply_styles(self):
+        # Button style
+        button_style = """
+        QPushButton {
+            min-width: 120px;
+            min-height: 35px;
+            font-size: 14px;
+            font-weight: bold;
+            border-radius: 8px;
+            background-color: #4CAF50;
+            color: white;
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
+        QPushButton:pressed {
+            background-color: #388E3C;
+        }
+        """
+        for widget in self.findChildren(QPushButton):
+            widget.setStyleSheet(button_style)
+
+        # Input fields
+        input_style = """
+        QLineEdit, QComboBox, QDateEdit {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 5px;
+            font-size: 14px;
+        }
+        QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
+            border: 2px solid #4CAF50;
+        }
+        """
+        for widget in self.findChildren((QLineEdit, QComboBox, QDateEdit)):
+            widget.setStyleSheet(input_style)
+
+        # GroupBox
+        group_style = """
+        QGroupBox {
+            font-size: 14px;
+            font-weight: bold;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            padding: 0 5px;
+        }
+        """
+        for widget in self.findChildren(QGroupBox):
+            widget.setStyleSheet(group_style)
+
+
         
     def setup_ui(self):
         # Create central widget and layout
@@ -394,48 +451,19 @@ class MainWindow(QMainWindow):
         self.thread.change_pixmap_signal.connect(self.update_image)
         self.thread.recognition_signal.connect(self.handle_recognition)
 
+        # Attendance table
+        self.attendance_table = QTableWidget()
+        self.attendance_table.setColumnCount(4)
+        self.attendance_table.setHorizontalHeaderLabels(['Student Name', 'Check-in Time', 'Status', 'Confidence'])
+        self.attendance_table.setStyleSheet(
+            "QTableWidget {"
+            "    border: 1px solid #ccc;"
+            "    background: #fff;"
+            "    gridline-color: #ddd;"
+            "}"
+        )
 
-        #Style definition for the application
-        button_style = """
-        QPushButton {
-            min-width: 150px;
-            min-height: 35px;
-            font-size: 14px;
-            font-weight: bold;
-            padding: 10px 20px;
-            border-radius: 8px;
-            background-color: #2196F3;
-            color: white;
-            border: none;
-        }
-        QPushButton:hover {
-            background-color: #1976D2;
-        }
-        QPushButton:pressed {
-            background-color: #1565C0;
-        }
-
-        """
-
-        input_style = """
-        QLineEdit, QComboBox {
-            min-height: 30px;
-            padding: 5px;
-            border: 1px solid #BDBDBD;
-            border-radius: 4px;
-            font-size: 13px;
-        }
-        QLineEdit:focus, QComboBox:focus {
-            border: 2px solid #2196F3;
-        }
-        """
-
-        # Apply styles
-        for widget in self.findChildren(QPushButton):
-            widget.setStyleSheet(button_style)
-
-        for widget in self.findChildren((QLineEdit, QComboBox)):
-            widget.setStyleSheet(input_style)
+        self.apply_styles()
 
     def add_class(self):
         class_name = self.class_name_input.text()
@@ -510,9 +538,9 @@ class MainWindow(QMainWindow):
         class_id = self.class_select.currentData()
         selected_date = self.date_select.date().toPyDate()
 
-        if class_id is None:
-            QMessageBox.warning(self, "Warning", "Please select a class to view attendance")
-            return
+        # if class_id is None:
+        #     QMessageBox.warning(self, "Warning", "Please select a class to view attendance")
+        #     return
         
         try:
             attendance_data = self.db.get_attendance_by_date(class_id, selected_date)
@@ -569,15 +597,6 @@ class MainWindow(QMainWindow):
         if status == 'present' and self.current_class_id:
             # Record attendance in database
             try:
-                # # Check if student is registered for this class
-                # self.db.cur.execute("""
-                #     SELECT 1 FROM class_students
-                #                  WHERE class_id = %s AND student_id = %s
-                # """, (self.current_class_id, int(user_id)))
-
-                # if not self.cur.fetchone():
-                #     self.status_label.setText(f"Student {user_id} not registered for this class")
-                #     return
                 if not self.db.is_student_registered(self.current_class_id, int(user_id)):
                     self.status_label.setText(f"Student {user_id} not registered for this class")
                     return
@@ -692,27 +711,6 @@ class MainWindow(QMainWindow):
                 cam.release()
                 self.train_model() # Always train model after capturing faces
 
-    # def train_model(self):
-    #     try:
-    #         path = 'dataset'
-    #         recognizer = cv2.face.LBPHFaceRecognizer_create()
-    #         detector = cv2.CascadeClassifier("haarcascade_frontalface_default.xml")
-
-    #         faces = []
-    #         ids = []
-            
-    #         for image_path in os.listdir(path):
-    #             if image_path.startswith("User"):
-    #                 img = Image.open(os.path.join(path, image_path)).convert('L')
-    #                 img_numpy = np.array(img, 'uint8')
-    #                 id_ = int(image_path.split(".")[1])
-    #                 faces.append(img_numpy)
-    #                 ids.append(id_)
-
-    #         recognizer.train(faces, np.array(ids))
-    #         recognizer.write('trainer/trainer.yml')
-    #         QMessageBox.information(self, "Success", "Registration complete and model trained!")
-
     def train_model(self):
         try:
             _logger.info("Training model....")
@@ -721,24 +719,28 @@ class MainWindow(QMainWindow):
 
             faces = []
             ids = []
-            
-            # Check if dataset directory is empty
-            if not os.listdir(DATASET_DIR):
-                raise ValueError("No face data available for training")
 
-            for image_path in os.listdir(DATASET_DIR):
-                if not image_path.startswith("User"):
+            # Duyệt qua các thư mục user trong DATASET_DIR
+            for user_dir in os.listdir(DATASET_DIR):
+                if not user_dir.startswith("User_"):
                     continue
                     
                 try:
-                    img_path = os.path.join(DATASET_DIR, image_path)
-                    img = Image.open(img_path).convert('L')
-                    img_numpy = np.array(img, 'uint8')
-                    id_ = int(image_path.split(".")[1])
-                    faces.append(img_numpy)
-                    ids.append(id_)
+                    # Lấy user_id từ tên thư mục
+                    user_id = int(user_dir.split("_")[1])
+                    user_path = os.path.join(DATASET_DIR, user_dir)
+                    
+                    # Duyệt qua các ảnh trong thư mục user
+                    for img_file in os.listdir(user_path):
+                        img_path = os.path.join(user_path, img_file)
+                        img = Image.open(img_path).convert('L')
+                        img_numpy = np.array(img, 'uint8')
+                        
+                        faces.append(img_numpy)
+                        ids.append(user_id)
+                        
                 except Exception as e:
-                    _logger.warning(f"Skipping corrupted image {image_path}: {str(e)}")
+                    _logger.warning(f"Error processing user directory {user_dir}: {str(e)}")
                     continue
 
             if not faces:
@@ -748,6 +750,34 @@ class MainWindow(QMainWindow):
             trainer_path = os.path.join(TRAINER_DIR, TRAINER_FILE)
             recognizer.write(trainer_path)
             QMessageBox.information(self, "Success", "Registration complete and model trained!")
+
+            
+            # # Check if dataset directory is empty
+            # if not os.listdir(DATASET_DIR):
+            #     raise ValueError("No face data available for training")
+
+            # for image_path in os.listdir(DATASET_DIR):
+            #     if not image_path.startswith("User"):
+            #         continue
+                    
+            #     try:
+            #         img_path = os.path.join(DATASET_DIR, image_path)
+            #         img = Image.open(img_path).convert('L')
+            #         img_numpy = np.array(img, 'uint8')
+            #         id_ = int(image_path.split(".")[1])
+            #         faces.append(img_numpy)
+            #         ids.append(id_)
+            #     except Exception as e:
+            #         _logger.warning(f"Skipping corrupted image {image_path}: {str(e)}")
+            #         continue
+
+            # if not faces:
+            #     raise ValueError("No valid face images found")
+
+            # recognizer.train(faces, np.array(ids))
+            # trainer_path = os.path.join(TRAINER_DIR, TRAINER_FILE)
+            # recognizer.write(trainer_path)
+            # QMessageBox.information(self, "Success", "Registration complete and model trained!")
             
         except Exception as e:
             _logger.error(f"Error training model: {str(e)}")

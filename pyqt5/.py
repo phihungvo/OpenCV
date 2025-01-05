@@ -1,131 +1,221 @@
+from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
+    QLabel, QLineEdit, QComboBox, QDateEdit, QPushButton, QTableWidget, 
+    QTableWidgetItem, QGroupBox, QFormLayout, QTabWidget, QMessageBox
+)
+from PyQt5.QtGui import QFont, QPalette, QColor
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Face Recognition Attendance System")
-        self.current_class_id = None  # Track current selected class
-        
-        # Ensure required directories exist
-        for directory in [DATASET_DIR, TRAINER_DIR]:
-            if not os.path.exists(directory):
-                os.makedirs(directory)
-
-        self.db = DatabaseManager()
+        self.resize(900, 600)
         self.setup_ui()
 
     def setup_ui(self):
-        # ... (previous code remains the same until camera tab setup)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QVBoxLayout(central_widget)
 
-        # Add class selection to camera tab
+        # Tabs container
+        tabs = QTabWidget()
+        layout.addWidget(tabs)
+
+        # Camera Feed Tab
         camera_tab = QWidget()
         camera_layout = QVBoxLayout(camera_tab)
-        
-        # Add class selection at the top of camera tab
+
+        # Add class selection
         class_select_layout = QHBoxLayout()
         class_select_layout.addWidget(QLabel("Select Class for Attendance:"))
         self.camera_class_select = QComboBox()
-        self.update_all_class_lists()  # This will now update camera_class_select too
         class_select_layout.addWidget(self.camera_class_select)
         camera_layout.addLayout(class_select_layout)
 
-        # Add image label for camera feed
+        # Image and status label
         self.image_label = QLabel()
         self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("border: 1px solid #ccc; background: #f9f9f9;")
         camera_layout.addWidget(self.image_label)
-        
-        # Add status label
-        self.status_label = QLabel("Please select a class and start recognition")
+
+        self.status_label = QLabel("Waiting for face detection...")
         self.status_label.setAlignment(Qt.AlignCenter)
+        self.status_label.setStyleSheet("font-size: 14px; font-style: italic; color: #555;")
         camera_layout.addWidget(self.status_label)
-        
-        # Add buttons
+
+        # Start/Stop buttons
         button_layout = QHBoxLayout()
         start_button = QPushButton("Start Recognition")
-        start_button.clicked.connect(self.start_recognition)
-        button_layout.addWidget(start_button)
-        
         stop_button = QPushButton("Stop Recognition")
-        stop_button.clicked.connect(self.stop_recognition)
+        button_layout.addWidget(start_button)
         button_layout.addWidget(stop_button)
-        
         camera_layout.addLayout(button_layout)
 
-    def update_all_class_lists(self):
-        """Update all class-related combo boxes"""
-        try:
-            classes = self.db.get_classes()
-            
-            # Update all class selection comboboxes
-            for combo in [self.class_select, self.class_combo, self.camera_class_select]:
-                combo.clear()
-                combo.addItem("Select Class", None)
-                for class_id, class_name in classes:
-                    combo.addItem(class_name, class_id)
-            
-        except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to fetch classes: {str(e)}")
+        tabs.addTab(camera_tab, "Camera Feed")
 
-    def start_recognition(self):
-        # Check if a class is selected
-        self.current_class_id = self.camera_class_select.currentData()
-        if self.current_class_id is None:
-            QMessageBox.warning(self, "Warning", "Please select a class before starting recognition")
-            return
+        # Class Management Tab
+        class_tab = QWidget()
+        class_layout = QVBoxLayout(class_tab)
+
+        form_group = QGroupBox("Add New Class")
+        form_layout = QFormLayout()
+
+        self.class_name_input = QLineEdit()
+        self.teacher_select = QComboBox()
+        self.semester_input = QLineEdit()
+
+        form_layout.addRow("Class Name:", self.class_name_input)
+        form_layout.addRow("Teacher:", self.teacher_select)
+        form_layout.addRow("Semester:", self.semester_input)
+
+        add_class_button = QPushButton("Add Class")
+        form_layout.addWidget(add_class_button)
+
+        form_group.setLayout(form_layout)
+        class_layout.addWidget(form_group)
+
+        tabs.addTab(class_tab, "Class Management")
+
+        # Attendance Tab
+        attendance_tab = QWidget()
+        attendance_layout = QVBoxLayout(attendance_tab)
+
+        # Date and class selection
+        date_layout = QHBoxLayout()
+        self.date_select = QDateEdit()
+        self.date_select.setDate(QDate.currentDate())
+        date_layout.addWidget(QLabel("Select Date:"))
+        date_layout.addWidget(self.date_select)
+
+        self.class_select = QComboBox()
+        date_layout.addWidget(QLabel("Select Class:"))
+        date_layout.addWidget(self.class_select)
+
+        view_button = QPushButton("View Attendance")
+        date_layout.addWidget(view_button)
+
+        attendance_layout.addLayout(date_layout)
+
+        # Add Registration tab
+        registration_tab = QWidget()
+        reg_layout = QFormLayout(registration_tab)
         
-        self.thread.running = True
-        self.thread.start()
-        self.status_label.setText("Recognition started. Waiting for faces...")
+        self.name_input = QLineEdit()
+        self.email_input = QLineEdit()
+        self.role_combo = QComboBox()
+        self.role_combo.addItems(['student', 'teacher', 'admin'])
 
-    def stop_recognition(self):
-        self.thread.running = False
-        self.thread.wait()
-        self.current_class_id = None
-        self.status_label.setText("Recognition stopped")
-
-    @pyqtSlot(str, float)
-    def handle_recognition(self, user_id, confidence):
-        try:
-            confidence_score = 100 - confidence
-            status = 'present' if confidence_score > CONFIDENCE_THRESHOLD else 'unknown'
-            
-            if status == 'present' and self.current_class_id:
-                # Record attendance in database
-                self.db.record_attendance(self.current_class_id, int(user_id), status, confidence_score)
-                
-                # Update status label with recognition result
-                self.status_label.setText(f"Attendance recorded for ID: {user_id} (Confidence: {confidence_score:.2f}%)")
-                
-                # Automatically refresh the attendance table if we're on the attendance tab
-                # and the date is today
-                if self.date_select.date() == QDate.currentDate():
-                    self.view_attendance()
-        except Exception as e:
-            _logger.error(f"Failed to handle recognition: {str(e)}")
-            self.status_label.setText(f"Error recording attendance: {str(e)}")
-
-    def view_attendance(self):
-        class_id = self.class_select.currentData()
-        selected_date = self.date_select.date().toPyDate()
+        self.update_class_list()
         
-        if class_id is None:
-            QMessageBox.warning(self, "Warning", "Please select a class to view attendance")
-            return
-            
+        reg_layout.addRow("Tên đầy đủ :", self.name_input)
+        reg_layout.addRow("Email:", self.email_input)
+        reg_layout.addRow("Vai trờ:", self.role_combo)
+        reg_layout.addRow("Lớp:", self.class_combo)
+
+        # Connect role change to toggle class selection visibility
+        self.role_combo.currentTextChanged.connect(self.toggle_class_selection)
+        
+        register_button = QPushButton("Đăng ký và chụp ảnh gương mặt")
+        register_button.clicked.connect(self.register_user)
+        reg_layout.addWidget(register_button)
+
+        # Initially hide class selection (shown only for students)
+        self.toggle_class_selection(self.role_combo.currentText())
+
+        tabs.addTab(registration_tab, "Đăng ký")
+
+        # Update teacher select combobox
+        self.teacher_select.clear()
         try:
-            attendance_data = self.db.get_attendance_by_date(class_id, selected_date)
-            
-            # Clear and set up the table
-            self.attendance_table.setRowCount(0)  # Clear existing rows
-            self.attendance_table.setRowCount(len(attendance_data))
-            
-            for row, (name, time, status, confidence) in enumerate(attendance_data):
-                # Add data to table
-                self.attendance_table.setItem(row, 0, QTableWidgetItem(str(name)))
-                self.attendance_table.setItem(row, 1, QTableWidgetItem(time.strftime("%H:%M:%S")))
-                self.attendance_table.setItem(row, 2, QTableWidgetItem(status))
-                self.attendance_table.setItem(row, 3, QTableWidgetItem(f"{confidence:.2f}%"))
-                
-            # Resize columns to content
-            self.attendance_table.resizeColumnsToContents()
-                
+            teachers = self.db.get_teachers()
+            for teacher_id, teacher_name in teachers:
+                self.teacher_select.addItem(teacher_name, teacher_id)
         except Exception as e:
-            QMessageBox.warning(self, "Error", f"Failed to load attendance data: {str(e)}")
+            QMessageBox.warning(self, "Error", f"Failed to fetch teachers: {str(e)}")
+        
+        # Set up face recognition thread
+        self.thread = FaceRecognitionThread()
+        self.thread.change_pixmap_signal.connect(self.update_image)
+        self.thread.recognition_signal.connect(self.handle_recognition)
+
+        # Attendance table
+        self.attendance_table = QTableWidget()
+        self.attendance_table.setColumnCount(4)
+        self.attendance_table.setHorizontalHeaderLabels(['Student Name', 'Check-in Time', 'Status', 'Confidence'])
+        self.attendance_table.setStyleSheet(
+            "QTableWidget {"
+            "    border: 1px solid #ccc;"
+            "    background: #fff;"
+            "    gridline-color: #ddd;"
+            "}"
+        )
+        attendance_layout.addWidget(self.attendance_table)
+
+        tabs.addTab(attendance_tab, "View Attendance")
+
+        # Style definitions
+        self.apply_styles()
+
+    def apply_styles(self):
+        # Button style
+        button_style = """
+        QPushButton {
+            min-width: 120px;
+            min-height: 35px;
+            font-size: 14px;
+            font-weight: bold;
+            border-radius: 8px;
+            background-color: #4CAF50;
+            color: white;
+        }
+        QPushButton:hover {
+            background-color: #45a049;
+        }
+        QPushButton:pressed {
+            background-color: #388E3C;
+        }
+        """
+        for widget in self.findChildren(QPushButton):
+            widget.setStyleSheet(button_style)
+
+        # Input fields
+        input_style = """
+        QLineEdit, QComboBox, QDateEdit {
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            padding: 5px;
+            font-size: 14px;
+        }
+        QLineEdit:focus, QComboBox:focus, QDateEdit:focus {
+            border: 2px solid #4CAF50;
+        }
+        """
+        for widget in self.findChildren((QLineEdit, QComboBox, QDateEdit)):
+            widget.setStyleSheet(input_style)
+
+        # GroupBox
+        group_style = """
+        QGroupBox {
+            font-size: 14px;
+            font-weight: bold;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        QGroupBox::title {
+            subcontrol-origin: margin;
+            subcontrol-position: top left;
+            padding: 0 5px;
+        }
+        """
+        for widget in self.findChildren(QGroupBox):
+            widget.setStyleSheet(group_style)
+
+
+if __name__ == "__main__":
+    import sys
+    app = QApplication(sys.argv)
+    main_window = MainWindow()
+    main_window.show()
+    sys.exit(app.exec_())
