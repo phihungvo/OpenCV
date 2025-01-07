@@ -45,7 +45,6 @@ class DatabaseManager:
         except Exception as e:
             _logger.error(f"Error closing database connection: {str(e)}")
 
-
     def add_user(self, full_name, email, role, class_id = None):
         try:
             _logger.info(f"Attempting to add user: {full_name}, {email}, {role}")

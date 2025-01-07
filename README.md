@@ -19,7 +19,7 @@ Dự án này là một **Hệ Thống Điểm Danh Bằng Nhận Diện Gương
 1. **Clone Repository:**
    ```bash
    git clone https://github.com/yourusername/facial-recognition-attendance.git
-   cd facial-recognition-attendance
+   cd opencv2
    ```
 
 2. **Thiết Lập Biến Môi Trường:**
@@ -58,3 +58,8 @@ Dự án này là một **Hệ Thống Điểm Danh Bằng Nhận Diện Gương
    - Dữ liệu điểm danh được lưu trữ trong cơ sở dữ liệu PostgreSQL và có thể được truy vấn hoặc xuất ra khi cần.
 
 
+## About the Author
+
+**Name:** Võ Phi Hùng  
+**Email:** [vophihung987@gmail.com](mailto:vophihung987@gmail.com)  
+**GitHub:** [github.com/phihungvo](https://github.com/phihungvo)  
