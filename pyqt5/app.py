@@ -432,7 +432,7 @@ class MainWindow(QMainWindow):
         button_layout.addWidget(stop_button)
         
         camera_layout.addLayout(button_layout)
-        tabs.addTab(camera_tab, "Camera Feed")
+        tabs.addTab(camera_tab, "Điểm danh bằng gương mặt")
         
         # Add Registration tab
         registration_tab = QWidget()
@@ -479,9 +479,47 @@ class MainWindow(QMainWindow):
         student_list_layout.addLayout(student_list_header)
         
         # Add student table
+        # self.student_table = QTableWidget()
+        # self.student_table.setColumnCount(4)
+        # self.student_table.setHorizontalHeaderLabels(['Mã sinh viên', 'Tên đầy đủ', 'Email', 'Today\'s Attendance'])
+                
+        # Add student table with improved styling
         self.student_table = QTableWidget()
         self.student_table.setColumnCount(4)
         self.student_table.setHorizontalHeaderLabels(['Mã sinh viên', 'Tên đầy đủ', 'Email', 'Today\'s Attendance'])
+
+        # Set table styling
+        self.student_table.setStyleSheet("""
+            QTableWidget {
+                border: 1px solid #ddd;
+                background-color: white;
+                gridline-color: #ddd;
+            }
+            QTableWidget::item {
+                padding: 5px;
+                border-bottom: 1px solid #ddd;
+            }
+            QHeaderView::section {
+                background-color: #f8f9fa;
+                padding: 5px;
+                border: none;
+                border-bottom: 2px solid #ddd;
+                font-weight: bold;
+            }
+        """)
+
+        # Set column widths
+        self.student_table.setColumnWidth(0, 100)  # Mã sinh viên
+        self.student_table.setColumnWidth(1, 150)  # Tên đầy đủ
+        self.student_table.setColumnWidth(2, 200)  # Email
+        self.student_table.setColumnWidth(3, 150)  # Attendance status
+
+        # Enable sorting
+        self.student_table.setSortingEnabled(True)
+
+        # Adjust size and scrolling behavior
+        self.student_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.student_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         student_list_layout.addWidget(self.student_table)
         
         tabs.addTab(student_list_tab, "Danh sách học sinh")
@@ -612,6 +650,32 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load attendance data: {str(e)}")
 
+    # def view_students(self):
+    #     class_id = self.student_list_class_select.currentData()
+    #     if class_id is None:
+    #         QMessageBox.warning(self, "Warning", "Please select a class to view students")
+    #         return
+        
+    #     try:
+    #         students = self.db.get_students_by_class(class_id)
+            
+    #         # Clear and set up the table
+    #         self.student_table.setRowCount(0)
+    #         self.student_table.setRowCount(len(students))
+            
+    #         for row, (user_id, name, email, status) in enumerate(students):
+    #             self.student_table.setItem(row, 0, QTableWidgetItem(str(user_id)))
+    #             self.student_table.setItem(row, 1, QTableWidgetItem(name))
+    #             self.student_table.setItem(row, 2, QTableWidgetItem(email))
+    #             self.student_table.setItem(row, 3, QTableWidgetItem(status))
+            
+    #         # Resize columns to content
+    #         self.student_table.resizeColumnsToContents()
+            
+    #     except Exception as e:
+    #         QMessageBox.warning(self, "Error", f"Failed to load student data: {str(e)}")
+
+    # Modify the view_students method to handle alignment:
     def view_students(self):
         class_id = self.student_list_class_select.currentData()
         if class_id is None:
@@ -621,19 +685,41 @@ class MainWindow(QMainWindow):
         try:
             students = self.db.get_students_by_class(class_id)
             
-            # Clear and set up the table
             self.student_table.setRowCount(0)
             self.student_table.setRowCount(len(students))
             
             for row, (user_id, name, email, status) in enumerate(students):
-                self.student_table.setItem(row, 0, QTableWidgetItem(str(user_id)))
-                self.student_table.setItem(row, 1, QTableWidgetItem(name))
-                self.student_table.setItem(row, 2, QTableWidgetItem(email))
-                self.student_table.setItem(row, 3, QTableWidgetItem(status))
+                # Create items with alignment
+                id_item = QTableWidgetItem(str(user_id))
+                id_item.setTextAlignment(Qt.AlignCenter)
+                
+                name_item = QTableWidgetItem(name)
+                name_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                
+                email_item = QTableWidgetItem(email)
+                email_item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+                
+                status_item = QTableWidgetItem(status)
+                status_item.setTextAlignment(Qt.AlignCenter)
+                
+                # Set items in table
+                self.student_table.setItem(row, 0, id_item)
+                self.student_table.setItem(row, 1, name_item)
+                self.student_table.setItem(row, 2, email_item)
+                self.student_table.setItem(row, 3, status_item)
+                
+                # Set row height
+                self.student_table.setRowHeight(row, 30)
             
-            # Resize columns to content
-            self.student_table.resizeColumnsToContents()
-            
+            # Make table rows fill the available height
+            header_height = self.student_table.horizontalHeader().height()
+            available_height = self.student_table.height() - header_height
+            if len(students) > 0:
+                # row_height = max(30, available_height / len(students))
+                row_height = int(max(30, available_height / len(students)))
+                for row in range(len(students)):
+                    self.student_table.setRowHeight(row, row_height)
+                    
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load student data: {str(e)}")
 
@@ -677,6 +763,18 @@ class MainWindow(QMainWindow):
                 if not self.db.is_student_registered(self.current_class_id, int(user_id)):
                     self.status_label.setText(f"Student {user_id} not registered for this class")
                     return
+                
+                # Check if attendance already recorded for today
+                self.db.cur.execute("""
+                    SELECT COUNT(*) 
+                    FROM attendance 
+                    WHERE class_id = %s AND student_id = %s AND attendance_date = CURRENT_DATE
+                """, (self.current_class_id, int(user_id)))
+                already_recorded = self.db.cur.fetchone()[0]
+
+                if already_recorded > 0:
+                    self.status_label.setText(f"Attendance already recorded for {user_id}")
+                    return
 
                 # Get student name before recording attendance
                 self.db.cur.execute("SELECT full_name FROM users WHERE user_id = %s", (int(user_id),))
@@ -684,9 +782,13 @@ class MainWindow(QMainWindow):
 
                 self.db.record_attendance(self.current_class_id, int(user_id), status, confidence_score)
 
-                # Show success message with student name
-                QMessageBox.information(self, "Attendance Recorded", 
-                    f"Attendance recorded successfully for {student_name}")
+                # Kiểm tra nếu tên sinh viên không rỗng trước khi hiển thị thông báo
+                if student_name:
+                    QMessageBox.information(self, "Attendance Recorded", 
+                                            f"Attendance recorded successfully for {student_name}")
+                else:
+                    QMessageBox.warning(self, "Error", "Student name could not be retrieved.")
+
                 
                 # Update status label with recognition result
                 self.status_label.setText(f"Attendance recorded for : {student_name} (Confidence: {confidence_score:.2f}%)")
