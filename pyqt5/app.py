@@ -188,6 +188,33 @@ class DatabaseManager:
             _logger.error(f"Failed to fetch attendance: {str(e)}")
             raise e
 
+    def get_students_by_class(self, class_id):
+        try:
+            self.cur.execute("""
+                SELECT u.user_id, u.full_name, u.email,
+                    CASE WHEN a.attendance_date = CURRENT_DATE 
+                            THEN 'Present' 
+                            ELSE 'Absent' 
+                    END as attendance_status
+                FROM users u
+                JOIN class_students cs ON u.user_id = cs.student_id
+                LEFT JOIN (
+                    SELECT DISTINCT ON (student_id) 
+                        student_id, 
+                        attendance_date,
+                        status
+                    FROM attendance 
+                    WHERE class_id = %s 
+                    AND attendance_date = CURRENT_DATE
+                ) a ON u.user_id = a.student_id
+                WHERE cs.class_id = %s
+                ORDER BY u.full_name
+            """, (class_id, class_id))
+            return self.cur.fetchall()
+        except Exception as e:
+            _logger.error(f"Failed to fetch students: {str(e)}")
+            raise e
+
 class FaceRecognitionThread(QThread):
     change_pixmap_signal = pyqtSignal(np.ndarray)
     recognition_signal = pyqtSignal(str, float)
@@ -246,7 +273,6 @@ class MainWindow(QMainWindow):
         self.db = DatabaseManager()
         self.setup_ui()
 
-    
     def apply_styles(self):
         # Button style
         button_style = """
@@ -301,9 +327,7 @@ class MainWindow(QMainWindow):
         """
         for widget in self.findChildren(QGroupBox):
             widget.setStyleSheet(group_style)
-
-
-        
+     
     def setup_ui(self):
         # Create central widget and layout
         central_widget = QWidget()
@@ -314,9 +338,11 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         layout.addWidget(tabs)
 
-        self.class_select = QComboBox()  # Moved up this line
-        # Create class selection combobox
+        # Initialize all combo boxes first # Initialize here
+        self.class_select = QComboBox()
         self.class_combo = QComboBox()
+        self.camera_class_select = QComboBox()
+        self.student_list_class_select = QComboBox()
         
         # Add Camera Feed tab
         camera_tab = QWidget()
@@ -324,8 +350,7 @@ class MainWindow(QMainWindow):
 
         # Add class selection at the top of camera tab
         class_select_layout = QHBoxLayout()
-        class_select_layout.addWidget(QLabel("Select Class for Attendance:"))
-        self.camera_class_select = QComboBox()
+        class_select_layout.addWidget(QLabel("Chọn Lớp để Điểm Danh:"))
         self.update_all_class_lists()  # This will now update camera_class_select too
         class_select_layout.addWidget(self.camera_class_select)
         camera_layout.addLayout(class_select_layout)
@@ -342,9 +367,9 @@ class MainWindow(QMainWindow):
         self.teacher_select = QComboBox()
         self.semester_input = QLineEdit()
         
-        form_layout.addRow("Class Name:", self.class_name_input)
-        form_layout.addRow("Teacher:", self.teacher_select)
-        form_layout.addRow("Semester:", self.semester_input)
+        form_layout.addRow("Tên lớp:", self.class_name_input)
+        form_layout.addRow("Giáo viên:", self.teacher_select)
+        form_layout.addRow("Học kỳ:", self.semester_input)
         
         add_class_button = QPushButton("Thêm lớp")
         add_class_button.clicked.connect(self.add_class)
@@ -356,7 +381,7 @@ class MainWindow(QMainWindow):
         # Initialize class_select here before using it
         self.update_class_combo()  # This will populate the class_select combobox
         
-        tabs.addTab(class_tab, "Class Management")
+        tabs.addTab(class_tab, "Quản lt lớp")
         
         # Add Attendance View tab
         attendance_tab = QWidget()
@@ -366,13 +391,13 @@ class MainWindow(QMainWindow):
         date_layout = QHBoxLayout()
         self.date_select = QDateEdit()
         self.date_select.setDate(QDate.currentDate())
-        date_layout.addWidget(QLabel("Select Date:"))
+        date_layout.addWidget(QLabel("Chọn ngày:"))
         date_layout.addWidget(self.date_select)
 
-        date_layout.addWidget(QLabel("Select Class for Attendance:"))
+        date_layout.addWidget(QLabel("Chọn lớp để điểm danh:"))
         date_layout.addWidget(self.class_select)
         
-        view_button = QPushButton("View Attendance")
+        view_button = QPushButton("Xem Điểm Danh")
         view_button.clicked.connect(self.view_attendance)
         date_layout.addWidget(view_button)
         
@@ -381,10 +406,10 @@ class MainWindow(QMainWindow):
         # Attendance table
         self.attendance_table = QTableWidget()
         self.attendance_table.setColumnCount(4)
-        self.attendance_table.setHorizontalHeaderLabels(['Student Name', 'Check-in Time', 'Status', 'Confidence'])
+        self.attendance_table.setHorizontalHeaderLabels(['Tên học sinh', 'Check-in Time', 'Trạng thái', 'Độ chính xác'])
         attendance_layout.addWidget(self.attendance_table)
         
-        tabs.addTab(attendance_tab, "View Attendance")
+        tabs.addTab(attendance_tab, "Xem Điểm Danh")
 
         # Add image label for camera feed
         self.image_label = QLabel()
@@ -392,17 +417,17 @@ class MainWindow(QMainWindow):
         camera_layout.addWidget(self.image_label)
         
         # Add status label
-        self.status_label = QLabel("Waiting for face detection...")
+        self.status_label = QLabel("Đang chờ nhận diện khuôn mặt...")
         self.status_label.setAlignment(Qt.AlignCenter)
         camera_layout.addWidget(self.status_label)
         
         # Add buttons
         button_layout = QHBoxLayout()
-        start_button = QPushButton("Start Recognition")
+        start_button = QPushButton("Bắt Đầu Điểm Danh")
         start_button.clicked.connect(self.start_recognition)
         button_layout.addWidget(start_button)
         
-        stop_button = QPushButton("Stop Recognition")
+        stop_button = QPushButton("Dừng Điểm Danh")
         stop_button.clicked.connect(self.stop_recognition)
         button_layout.addWidget(stop_button)
         
@@ -422,7 +447,7 @@ class MainWindow(QMainWindow):
         
         reg_layout.addRow("Tên đầy đủ :", self.name_input)
         reg_layout.addRow("Email:", self.email_input)
-        reg_layout.addRow("Vai trờ:", self.role_combo)
+        reg_layout.addRow("Vai trò:", self.role_combo)
         reg_layout.addRow("Lớp:", self.class_combo)
 
         # Connect role change to toggle class selection visibility
@@ -436,6 +461,30 @@ class MainWindow(QMainWindow):
         self.toggle_class_selection(self.role_combo.currentText())
 
         tabs.addTab(registration_tab, "Đăng ký")
+
+        # Add Student List tab
+        student_list_tab = QWidget()
+        student_list_layout = QVBoxLayout(student_list_tab)
+        
+        # Add class selection for student list
+        student_list_header = QHBoxLayout()
+        student_list_header.addWidget(QLabel("Chọn lớp:"))
+        self.update_all_class_lists()  # This will now update student_list_class_select too
+        student_list_header.addWidget(self.student_list_class_select)
+        
+        view_students_button = QPushButton("View Students")
+        view_students_button.clicked.connect(self.view_students)
+        student_list_header.addWidget(view_students_button)
+        
+        student_list_layout.addLayout(student_list_header)
+        
+        # Add student table
+        self.student_table = QTableWidget()
+        self.student_table.setColumnCount(4)
+        self.student_table.setHorizontalHeaderLabels(['Mã sinh viên', 'Tên đầy đủ', 'Email', 'Today\'s Attendance'])
+        student_list_layout.addWidget(self.student_table)
+        
+        tabs.addTab(student_list_tab, "Danh sách học sinh")
 
         # Update teacher select combobox
         self.teacher_select.clear()
@@ -454,7 +503,7 @@ class MainWindow(QMainWindow):
         # Attendance table
         self.attendance_table = QTableWidget()
         self.attendance_table.setColumnCount(4)
-        self.attendance_table.setHorizontalHeaderLabels(['Student Name', 'Check-in Time', 'Status', 'Confidence'])
+        self.attendance_table.setHorizontalHeaderLabels(['Tên học sinh', 'Check-in Time', 'Trạng thái', 'Độ chính xác'])
         self.attendance_table.setStyleSheet(
             "QTableWidget {"
             "    border: 1px solid #ccc;"
@@ -508,7 +557,8 @@ class MainWindow(QMainWindow):
             #     self.class_combo.addItem(class_name, class_id)
 
             # Update all class selection comboboxes
-            for combo in [self.class_select, self.class_combo, self.camera_class_select]:
+            for combo in [self.class_select, self.class_combo, self.camera_class_select, 
+                        self.student_list_class_select]:  # Added student_list_class_select
                 combo.clear()
                 combo.addItem("Select Class", None)
                 for class_id, class_name in classes:
@@ -534,13 +584,14 @@ class MainWindow(QMainWindow):
         if role != 'student':
             self.class_combo.setCurrentIndex(0)
 
+    # Fix the view_attendance method:
     def view_attendance(self):
         class_id = self.class_select.currentData()
         selected_date = self.date_select.date().toPyDate()
 
-        # if class_id is None:
-        #     QMessageBox.warning(self, "Warning", "Please select a class to view attendance")
-        #     return
+        if class_id is None:
+            QMessageBox.warning(self, "Warning", "Please select a class to view attendance")
+            return
         
         try:
             attendance_data = self.db.get_attendance_by_date(class_id, selected_date)
@@ -560,6 +611,31 @@ class MainWindow(QMainWindow):
 
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Failed to load attendance data: {str(e)}")
+
+    def view_students(self):
+        class_id = self.student_list_class_select.currentData()
+        if class_id is None:
+            QMessageBox.warning(self, "Warning", "Please select a class to view students")
+            return
+        
+        try:
+            students = self.db.get_students_by_class(class_id)
+            
+            # Clear and set up the table
+            self.student_table.setRowCount(0)
+            self.student_table.setRowCount(len(students))
+            
+            for row, (user_id, name, email, status) in enumerate(students):
+                self.student_table.setItem(row, 0, QTableWidgetItem(str(user_id)))
+                self.student_table.setItem(row, 1, QTableWidgetItem(name))
+                self.student_table.setItem(row, 2, QTableWidgetItem(email))
+                self.student_table.setItem(row, 3, QTableWidgetItem(status))
+            
+            # Resize columns to content
+            self.student_table.resizeColumnsToContents()
+            
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Failed to load student data: {str(e)}")
 
     def start_recognition(self):
         # Check if a class is selected
@@ -583,6 +659,7 @@ class MainWindow(QMainWindow):
         qt_img = self.convert_cv_qt(cv_img)
         self.image_label.setPixmap(qt_img)
 
+    # Update the handle_recognition method to show success message:
     @pyqtSlot(str, float)
     def handle_recognition(self, user_id, confidence):
         # Convert OpenCV confidence (lower is better) to percentage (higher is better)
@@ -601,9 +678,18 @@ class MainWindow(QMainWindow):
                     self.status_label.setText(f"Student {user_id} not registered for this class")
                     return
 
+                # Get student name before recording attendance
+                self.db.cur.execute("SELECT full_name FROM users WHERE user_id = %s", (int(user_id),))
+                student_name = self.db.cur.fetchone()[0]
+
                 self.db.record_attendance(self.current_class_id, int(user_id), status, confidence_score)
+
+                # Show success message with student name
+                QMessageBox.information(self, "Attendance Recorded", 
+                    f"Attendance recorded successfully for {student_name}")
+                
                 # Update status label with recognition result
-                self.status_label.setText(f"Attendance recorded for ID: {user_id} (Confidence: {confidence_score:.2f}%)")
+                self.status_label.setText(f"Attendance recorded for : {student_name} (Confidence: {confidence_score:.2f}%)")
 
                 # Automatically refresh the attendance table if we're on the attendance tab
                 # and the date is today
@@ -782,7 +868,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             _logger.error(f"Error training model: {str(e)}")
             QMessageBox.warning(self, "Error", f"Failed to train model: {str(e)}")
-
 
     def closeEvent(self, event):
         """Handle application shutdown"""
