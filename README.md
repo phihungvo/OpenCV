@@ -8,6 +8,10 @@ Dự án này là một **Hệ Thống Điểm Danh Bằng Nhận Diện Gương
 - Giao diện thân thiện với người dùng được xây dựng bằng **PyQt5**.
 - Lưu trữ dữ liệu an toàn và hiệu quả với **PostgreSQL**.
 - Được container hóa hoàn toàn bằng **Docker** để đảm bảo tính nhất quán và dễ dàng triển khai.
+- Tải danh sách học sinh theo lớp và ngày đã chọn
+- Hiển thị trạng thái điểm danh hiện tại nếu đã có
+- Cho phép cập nhật hàng loạt
+- Tự động refresh danh sách học sinh khi lưu điểm danh
 
 ## Yêu Cầu
 - Docker & Docker Compose
